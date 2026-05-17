@@ -1,12 +1,12 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import type { AggregatedPoint, ReportingResponse } from "@/lib/reporting";
+import type { AggregatedPoint, ForecastPoint, ReportingResponse } from "@/lib/reporting";
 
 const initialFilters = {
   category: "All",
   startDate: "2026-04-01",
-  endDate: "2026-04-30",
+  endDate: "2026-04-12",
   groupBy: "date"
 };
 
@@ -15,23 +15,25 @@ type Filters = typeof initialFilters;
 const datePresets = [
   {
     label: "7 day",
-    startDate: "2026-04-24",
-    endDate: "2026-04-30"
+    // The mock dataset currently ends on 2026-04-12, so presets are anchored
+    // to the latest available seed date instead of the real current date.
+    startDate: "2026-04-06",
+    endDate: "2026-04-12"
   },
   {
     label: "30 day",
-    startDate: "2026-04-01",
-    endDate: "2026-04-30"
+    startDate: "2026-03-14",
+    endDate: "2026-04-12"
   },
   {
     label: "90 day",
-    startDate: "2026-01-31",
-    endDate: "2026-04-30"
+    startDate: "2026-01-13",
+    endDate: "2026-04-12"
   },
   {
     label: "All time",
-    startDate: "2024-05-01",
-    endDate: "2026-04-30"
+    startDate: "2026-04-01",
+    endDate: "2026-04-12"
   }
 ];
 
@@ -49,14 +51,9 @@ export default function DashboardPage() {
     setError("");
 
     fetch(`/api/reporting?${params.toString()}`)
-      .then(async (response) => {
-        const payload = await response.json();
-
-        if (!response.ok) {
-          throw new Error(payload.error || "Unable to load reporting data.");
-        }
-
-        return payload as ReportingResponse;
+      .then((response) => {
+        if (!response.ok) throw new Error("Unable to load reporting data.");
+        return response.json() as Promise<ReportingResponse>;
       })
       .then(setReport)
       .catch((caughtError: Error) => setError(caughtError.message))
@@ -75,8 +72,8 @@ export default function DashboardPage() {
           <p className="eyebrow">Protected reporting sandbox</p>
           <h1>Specialty produce article engagement</h1>
           <p className="lede">
-            Simulated GA records are ingested into Supabase, then parsed through the reporting
-            layer into filtered aggregate views.
+            Mock source records stay behind the reporting layer. The dashboard only receives
+            aggregated views, scores, rankings, and a rolling-average forecast.
           </p>
         </div>
       </header>
@@ -202,9 +199,13 @@ export default function DashboardPage() {
             </section>
 
             <section className="grid">
-              <div className="panel panel--chart">
-                <h2>{chartTitle(report.filters.groupBy)}</h2>
-                <HorizontalReportChart points={report.results} groupBy={report.filters.groupBy} />
+              <div className="panel">
+                <h2>Engagement over time</h2>
+                <EngagementChart
+                  points={report.results}
+                  forecast={report.forecast}
+                  groupBy={report.filters.groupBy}
+                />
               </div>
 
               <div className="table-wrap">
@@ -219,64 +220,68 @@ export default function DashboardPage() {
   );
 }
 
-function HorizontalReportChart({ points, groupBy }: { points: AggregatedPoint[]; groupBy: string }) {
-  const chartPoints = useMemo(() => prepareChartPoints(points, groupBy), [points, groupBy]);
-  const maxViews = Math.max(...chartPoints.map((point) => point.views), 1);
-  const xTicks = buildTicks(maxViews);
+function EngagementChart({
+  points,
+  forecast,
+  groupBy
+}: {
+  points: AggregatedPoint[];
+  forecast: ForecastPoint[];
+  groupBy: string;
+}) {
+  const chart = useMemo(() => buildChart(points, forecast), [points, forecast]);
 
-  if (chartPoints.length === 0) {
+  if (points.length === 0) {
     return <div className="empty">No aggregate data matches these filters.</div>;
   }
 
-  return (
-    <div className="report-chart">
-      <div className="chart-legend" aria-label="Chart legend">
-        <span>
-          <i className="legend-box legend-box--engagement" />
-          Engagement
-        </span>
-        <span>
-          <i className="legend-box legend-box--views" />
-          Views
-        </span>
-      </div>
+  // Forecasts are most meaningful when the API is grouped by date.
+  const showForecast = groupBy === "date" && forecast.length > 0;
 
-      <div className="bar-grid">
-        {chartPoints.map((point) => (
-          <div className="bar-row" key={point.label}>
-            <div className="bar-label">{point.label}</div>
-            <div className="bar-track">
-              <div className="bar-line">
-                <span
-                  className="bar bar--engagement"
-                  style={{ width: `${point.averageEngagementScore}%` }}
-                />
-                <b style={{ left: `${point.averageEngagementScore}%` }}>
-                  {point.averageEngagementScore}
-                </b>
-              </div>
-              <div className="bar-line">
-                <span
-                  className="bar bar--views"
-                  style={{ width: `${(point.views / maxViews) * 100}%` }}
-                />
-                <b style={{ left: `${(point.views / maxViews) * 100}%` }}>
-                  {formatNumber(point.views)}
-                </b>
-              </div>
-            </div>
-          </div>
+  return (
+    <>
+      <svg className="chart" viewBox="0 0 760 330" role="img" aria-label="Views chart">
+        <line className="axis" x1="56" x2="730" y1="280" y2="280" />
+        <line className="axis" x2="56" x1="56" y1="24" y2="280" />
+
+        {chart.yTicks.map((tick) => (
+          <g key={tick.value}>
+            <line className="tick" x1="52" x2="730" y1={tick.y} y2={tick.y} />
+            <text className="chart-label" x="12" y={tick.y + 4}>
+              {formatCompact(tick.value)}
+            </text>
+          </g>
         ))}
 
-        <div className="axis-row" aria-hidden="true">
-          {xTicks.map((tick, index) => (
-            <span key={tick} style={{ gridColumn: index + 2 }}>
-              {formatCompact(tick)}
-            </span>
-          ))}
-        </div>
+        <polyline className="line" points={chart.actualPath} />
+        {showForecast ? <polyline className="forecast-line" points={chart.forecastPath} /> : null}
+
+        {chart.actualPoints.map((point) => (
+          <circle className="point" key={point.label} cx={point.x} cy={point.y} r="4" />
+        ))}
+        {showForecast
+          ? chart.forecastPoints.map((point) => (
+              <circle
+                className="forecast-point"
+                key={point.label}
+                cx={point.x}
+                cy={point.y}
+                r="4"
+              />
+            ))
+          : null}
+
+        {chart.axisLabels.map((label) => (
+          <text className="chart-label" key={label.text} x={label.x} y="310" textAnchor="middle">
+            {label.text}
+          </text>
+        ))}
+      </svg>
+      <div className="legend">
+        <span>Actual aggregate views</span>
+        {showForecast ? <span>Three-day rolling average forecast</span> : null}
       </div>
-    </div>
+    </>
   );
 }
 
@@ -307,65 +312,68 @@ function TopArticlesTable({ report }: { report: ReportingResponse }) {
   );
 }
 
-function prepareChartPoints(points: AggregatedPoint[], groupBy: string): AggregatedPoint[] {
-  if (groupBy !== "date") {
-    return [...points].sort((a, b) => b.views - a.views);
-  }
+function buildChart(points: AggregatedPoint[], forecast: ForecastPoint[]) {
+  const width = 760;
+  const height = 330;
+  const padding = { top: 24, right: 30, bottom: 50, left: 56 };
+  const allValues = [
+    ...points.map((point) => point.views),
+    ...forecast.map((point) => point.forecastViews)
+  ];
+  const maxValue = Math.max(...allValues, 1);
+  const yMax = Math.ceil(maxValue / 500) * 500;
 
-  const buckets = new Map<string, AggregatedPoint[]>();
+  const actualLabels = points.map((point) => point.label);
+  const forecastLabels = forecast.map((point) => point.date);
+  const labels = [...actualLabels, ...forecastLabels];
 
-  for (const point of points) {
-    const monthKey = point.label.slice(0, 7);
-    const bucket = buckets.get(monthKey) || [];
-    bucket.push(point);
-    buckets.set(monthKey, bucket);
-  }
+  const xForIndex = (index: number) => {
+    if (labels.length === 1) return width / 2;
+    return padding.left + (index / (labels.length - 1)) * (width - padding.left - padding.right);
+  };
 
-  return [...buckets.entries()].map(([monthKey, bucket]) => {
-    const recordCount = bucket.reduce((sum, point) => sum + point.recordCount, 0);
-    const weightedEngagement = bucket.reduce(
-      (sum, point) => sum + point.averageEngagementScore * point.recordCount,
-      0
-    );
+  const yForValue = (value: number) => {
+    const chartHeight = height - padding.top - padding.bottom;
+    return padding.top + (1 - value / yMax) * chartHeight;
+  };
 
-    return {
-      label: formatMonth(monthKey),
-      views: bucket.reduce((sum, point) => sum + point.views, 0),
-      averageEngagementScore: Math.round((weightedEngagement / Math.max(recordCount, 1)) * 10) / 10,
-      recordCount
-    };
-  });
+  const actualPoints = points.map((point, index) => ({
+    label: point.label,
+    x: xForIndex(index),
+    y: yForValue(point.views)
+  }));
+
+  const forecastPoints = forecast.map((point, index) => ({
+    label: point.date,
+    x: xForIndex(points.length + index),
+    y: yForValue(point.forecastViews)
+  }));
+
+  const yTicks = [0, yMax / 2, yMax].map((value) => ({
+    value,
+    y: yForValue(value)
+  }));
+
+  // Keep axis labels sparse so small screens remain readable.
+  const axisLabels = labels
+    .filter((_, index) => index === 0 || index === labels.length - 1 || index % 4 === 0)
+    .map((text) => ({
+      text,
+      x: xForIndex(labels.indexOf(text))
+    }));
+
+  return {
+    actualPoints,
+    forecastPoints,
+    actualPath: toPolyline(actualPoints),
+    forecastPath: toPolyline([...actualPoints.slice(-1), ...forecastPoints]),
+    yTicks,
+    axisLabels
+  };
 }
 
-function buildTicks(maxValue: number) {
-  const step = niceStep(maxValue / 6);
-  return Array.from({ length: 7 }, (_, index) => index * step);
-}
-
-function niceStep(value: number) {
-  const magnitude = 10 ** Math.floor(Math.log10(Math.max(value, 1)));
-  const normalized = value / magnitude;
-
-  if (normalized <= 1) return magnitude;
-  if (normalized <= 2) return 2 * magnitude;
-  if (normalized <= 5) return 5 * magnitude;
-  return 10 * magnitude;
-}
-
-function chartTitle(groupBy: string) {
-  if (groupBy === "date") return "Monthly engagement";
-  if (groupBy === "country") return "Engagement by country";
-  return "Engagement by source";
-}
-
-function formatMonth(value: string) {
-  const [year, month] = value.split("-");
-  const date = new Date(Number(year), Number(month) - 1, 1);
-
-  return new Intl.DateTimeFormat("en-US", {
-    month: "long",
-    year: "numeric"
-  }).format(date);
+function toPolyline(points: { x: number; y: number }[]) {
+  return points.map((point) => `${point.x},${point.y}`).join(" ");
 }
 
 function formatNumber(value: number) {

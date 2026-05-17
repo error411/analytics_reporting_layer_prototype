@@ -1,14 +1,17 @@
 import {
+  getImportMetadata,
+  hasAnalyticsData,
+  selectArticles,
+  selectGaDailyEngagement,
+  upsertAnalyticsSnapshot,
   type Article,
   type GaDailyEngagementRow
 } from "@/lib/database";
 import { fetchSimulatedGaApiData, mapGaPayloadToRows } from "@/lib/ga-api";
-import { supabaseRequest } from "@/lib/supabase-rest";
 
 export type GroupBy = "date" | "source" | "country";
 
 export type ReportingQuery = {
-  articleId?: string;
   category?: string;
   startDate?: string;
   endDate?: string;
@@ -38,7 +41,6 @@ export type ForecastPoint = {
 
 export type ReportingResponse = {
   filters: {
-    articleId?: string;
     category: string;
     startDate: string;
     endDate: string;
@@ -65,127 +67,161 @@ export type ReportingResponse = {
 
 const allowedGroupBy: GroupBy[] = ["date", "source", "country"];
 
-type SupabaseArticleRow = {
-  id: string;
-  title: string;
-  category: string;
-  slug: string;
-};
-
-type SupabaseEngagementRow = {
-  id: string;
-  article_id: string;
-  date: string;
-  views: number;
-  engagement_score: number;
-  country: string;
-  source: string;
-  imported_at: string;
-};
-
-type ImportRunRow = {
-  source: "simulated-ga-api";
-  imported_at: string;
-  article_rows: number;
-  engagement_rows: number;
-};
-
-export async function ingestSimulatedGaData() {
+export function ingestSimulatedGaData() {
   const payload = fetchSimulatedGaApiData();
   const rows = mapGaPayloadToRows(payload);
+  upsertAnalyticsSnapshot(rows);
+  return getImportMetadata();
+}
 
-  await supabaseRequest<SupabaseArticleRow[]>("articles", {
-    method: "POST",
-    query: { on_conflict: "id" },
-    body: rows.articles.map(toArticleRow),
-    prefer: "resolution=merge-duplicates"
-  });
+function ensureAnalyticsData() {
+  if (!hasAnalyticsData()) {
+    ingestSimulatedGaData();
+  }
+}
 
-  await supabaseRequest<SupabaseEngagementRow[]>("ga_daily_engagement", {
-    method: "POST",
-    query: { on_conflict: "article_id,date,country,source" },
-    body: rows.engagement.map(toEngagementRow),
-    prefer: "resolution=merge-duplicates"
-  });
-
-  const [importRun] = await supabaseRequest<ImportRunRow[]>("ga_import_runs", {
-    method: "POST",
-    body: {
-      source: "simulated-ga-api",
-      imported_at: rows.engagement[0]?.importedAt || new Date().toISOString(),
-      article_rows: rows.articles.length,
-      engagement_rows: rows.engagement.length
-    },
-    prefer: "return=representation"
-  });
-
-  return {
-    source: importRun.source,
-    importedAt: importRun.imported_at,
-    articleRows: importRun.article_rows,
-    engagementRows: importRun.engagement_rows
-  };
+export function getCategories() {
+  ensureAnalyticsData();
+  const articles = selectArticles();
+  return [...new Set(articles.map((article) => article.category))].sort();
 }
 
 export function normalizeQuery(query: ReportingQuery) {
-  const articleId = query.articleId || undefined;
+  ensureAnalyticsData();
+  const engagement = selectGaDailyEngagement();
   const category = query.category || "All";
   const groupBy = allowedGroupBy.includes(query.groupBy) ? query.groupBy : "date";
-  const startDate = query.startDate || undefined;
-  const endDate = query.endDate || undefined;
 
-  return { articleId, category, startDate, endDate, groupBy };
+  // The seed data is small, so deriving default dates from it keeps the demo portable.
+  const sortedDates = [...new Set(engagement.map((record) => record.date))].sort();
+  const startDate = query.startDate || sortedDates[0];
+  const endDate = query.endDate || sortedDates[sortedDates.length - 1];
+
+  return { category, startDate, endDate, groupBy };
 }
 
-export async function buildReport(query: ReportingQuery): Promise<ReportingResponse> {
+export function buildReport(query: ReportingQuery): ReportingResponse {
+  ensureAnalyticsData();
+
   const filters = normalizeQuery(query);
+  const articles = selectArticles();
+  const engagement = selectGaDailyEngagement();
+  const articleById = new Map(articles.map((article) => [article.id, article]));
+  const importMetadata = getImportMetadata();
 
-  // The first report request behaves like a scheduled ETL job in miniature:
-  // if no imported GA rows exist yet, pull the simulated feed into Supabase.
-  const existingRows = await supabaseRequest<Array<{ id: string }>>("ga_daily_engagement", {
-    query: { select: "id", limit: "1" }
+  // This is the "protected reporting layer": raw engagement rows are filtered here,
+  // after the GA import has landed in database tables. Only aggregate values leave
+  // this module through the API response.
+  const filteredRecords = engagement.filter((record) => {
+    const article = articleById.get(record.articleId);
+
+    if (!article) return false;
+    if (filters.category !== "All" && article.category !== filters.category) return false;
+    if (record.date < filters.startDate || record.date > filters.endDate) return false;
+
+    return true;
   });
 
-  if (existingRows.length === 0) {
-    await ingestSimulatedGaData();
-  }
+  const results = aggregateRecords(filteredRecords, filters.groupBy);
+  const topArticles = buildTopArticles(filteredRecords, articleById);
+  const totalViews = filteredRecords.reduce((sum, record) => sum + record.views, 0);
 
-  const body: {
-    p_category: string;
-    p_start_date: string | null;
-    p_end_date: string | null;
-    p_group_by: GroupBy;
-    p_article_id?: string;
-  } = {
-    p_category: filters.category,
-    p_start_date: filters.startDate || null,
-    p_end_date: filters.endDate || null,
-    p_group_by: filters.groupBy
-  };
-
-  if (filters.articleId) {
-    body.p_article_id = filters.articleId;
-  }
-
-  return supabaseRequest<ReportingResponse>("rpc/build_reporting_report", {
-    method: "POST",
-    body
-  });
-}
-
-function toArticleRow(article: Article): SupabaseArticleRow {
-  return article;
-}
-
-function toEngagementRow(record: GaDailyEngagementRow): SupabaseEngagementRow {
   return {
-    id: record.id,
-    article_id: record.articleId,
-    date: record.date,
-    views: record.views,
-    engagement_score: record.engagementScore,
-    country: record.country,
-    source: record.source,
-    imported_at: record.importedAt
+    filters,
+    categories: getCategories(),
+    totals: {
+      views: totalViews,
+      averageEngagementScore: average(filteredRecords.map((record) => record.engagementScore)),
+      articleCount: new Set(filteredRecords.map((record) => record.articleId)).size
+    },
+    results,
+    topArticles,
+    forecast: buildForecast(filteredRecords),
+    dataSource: {
+      source: importMetadata?.source || "simulated-ga-api",
+      importedAt: importMetadata?.importedAt || "",
+      tables: {
+        articles: importMetadata?.articleRows || articles.length,
+        gaDailyEngagement: importMetadata?.engagementRows || engagement.length
+      }
+    }
   };
+}
+
+function aggregateRecords(records: GaDailyEngagementRow[], groupBy: GroupBy) {
+  const buckets = new Map<string, GaDailyEngagementRow[]>();
+
+  for (const record of records) {
+    const key = record[groupBy];
+    const bucket = buckets.get(key) || [];
+    bucket.push(record);
+    buckets.set(key, bucket);
+  }
+
+  return [...buckets.entries()]
+    .map(([label, bucket]) => ({
+      label,
+      views: bucket.reduce((sum, record) => sum + record.views, 0),
+      averageEngagementScore: average(bucket.map((record) => record.engagementScore)),
+      recordCount: bucket.length
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function buildTopArticles(
+  records: GaDailyEngagementRow[],
+  articleById: Map<string, Article>
+): TopArticle[] {
+  const buckets = new Map<string, GaDailyEngagementRow[]>();
+
+  for (const record of records) {
+    const bucket = buckets.get(record.articleId) || [];
+    bucket.push(record);
+    buckets.set(record.articleId, bucket);
+  }
+
+  return [...buckets.entries()]
+    .map(([articleId, bucket]) => {
+      const article = articleById.get(articleId);
+
+      return {
+        articleId,
+        title: article?.title || "Unknown article",
+        category: article?.category || "Unknown",
+        slug: article?.slug || "",
+        views: bucket.reduce((sum, record) => sum + record.views, 0),
+        averageEngagementScore: average(bucket.map((record) => record.engagementScore))
+      };
+    })
+    .sort((a, b) => b.views - a.views)
+    .slice(0, 5);
+}
+
+function buildForecast(records: GaDailyEngagementRow[]): ForecastPoint[] {
+  const dailyViews = aggregateRecords(records, "date");
+  const lastThreeDays = dailyViews.slice(-3);
+  const rollingAverage = Math.round(average(lastThreeDays.map((point) => point.views)));
+  const finalDate = dailyViews.at(-1)?.label;
+
+  if (!finalDate || rollingAverage === 0) return [];
+
+  // A simple teaching forecast: take the last three actual days, average them,
+  // then extend the line three days forward with that expected daily view count.
+  return [1, 2, 3].map((offset) => ({
+    date: addDays(finalDate, offset),
+    forecastViews: rollingAverage
+  }));
+}
+
+function average(values: number[]) {
+  if (values.length === 0) return 0;
+
+  const total = values.reduce((sum, value) => sum + value, 0);
+  return Math.round((total / values.length) * 10) / 10;
+}
+
+function addDays(date: string, offset: number) {
+  const nextDate = new Date(`${date}T00:00:00`);
+  nextDate.setDate(nextDate.getDate() + offset);
+  return nextDate.toISOString().slice(0, 10);
 }
