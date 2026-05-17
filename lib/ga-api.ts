@@ -18,6 +18,7 @@ export type GaApiPayload = {
 };
 
 export function fetchSimulatedGaApiData(): GaApiPayload {
+  // This stands in for an external GA request while keeping the prototype offline-friendly.
   return {
     articles: seed.articles as GaArticlePayload[],
     engagement: seed.engagement as GaMetricPayload[]
@@ -28,6 +29,7 @@ export function mapGaPayloadToRows(payload: GaApiPayload): {
   articles: Article[];
   engagement: GaDailyEngagementRow[];
 } {
+  // Normalize the external-style payload into rows shaped like database records.
   const importedAt = "2026-04-13T08:00:00.000Z";
 
   return {

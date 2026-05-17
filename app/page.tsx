@@ -39,6 +39,7 @@ const datePresets = [
 
 export default function DashboardPage() {
   const [filters, setFilters] = useState<Filters>(initialFilters);
+  // Keep draft form edits separate from the query currently driving the report.
   const [appliedFilters, setAppliedFilters] = useState<Filters>(initialFilters);
   const [report, setReport] = useState<ReportingResponse | null>(null);
   const [error, setError] = useState("");
@@ -47,6 +48,7 @@ export default function DashboardPage() {
   useEffect(() => {
     const params = new URLSearchParams(appliedFilters);
 
+    // Treat each filter application as a fresh report request.
     setIsLoading(true);
     setError("");
 
@@ -93,6 +95,7 @@ export default function DashboardPage() {
                     key={preset.label}
                     type="button"
                     onClick={() => {
+                      // Presets are direct actions, so apply them immediately.
                       const nextFilters = {
                         ...filters,
                         startDate: preset.startDate,
@@ -229,6 +232,7 @@ function EngagementChart({
   forecast: ForecastPoint[];
   groupBy: string;
 }) {
+  // Memoize the geometry so table/filter state updates do not recompute chart paths.
   const chart = useMemo(() => buildChart(points, forecast), [points, forecast]);
 
   if (points.length === 0) {
@@ -313,6 +317,7 @@ function TopArticlesTable({ report }: { report: ReportingResponse }) {
 }
 
 function buildChart(points: AggregatedPoint[], forecast: ForecastPoint[]) {
+  // Translate report buckets into SVG coordinates for the fixed chart viewBox.
   const width = 760;
   const height = 330;
   const padding = { top: 24, right: 30, bottom: 50, left: 56 };

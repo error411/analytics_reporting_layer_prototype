@@ -68,6 +68,7 @@ export type ReportingResponse = {
 const allowedGroupBy: GroupBy[] = ["date", "source", "country"];
 
 export function ingestSimulatedGaData() {
+  // Ingest is intentionally deterministic so report output is stable across reloads.
   const payload = fetchSimulatedGaApiData();
   const rows = mapGaPayloadToRows(payload);
   upsertAnalyticsSnapshot(rows);
@@ -75,6 +76,7 @@ export function ingestSimulatedGaData() {
 }
 
 function ensureAnalyticsData() {
+  // Lazily seed the in-memory tables the first time a report or category list is requested.
   if (!hasAnalyticsData()) {
     ingestSimulatedGaData();
   }
@@ -149,6 +151,7 @@ export function buildReport(query: ReportingQuery): ReportingResponse {
 }
 
 function aggregateRecords(records: GaDailyEngagementRow[], groupBy: GroupBy) {
+  // Bucket first, then derive every aggregate from the same filtered record set.
   const buckets = new Map<string, GaDailyEngagementRow[]>();
 
   for (const record of records) {
@@ -172,6 +175,7 @@ function buildTopArticles(
   records: GaDailyEngagementRow[],
   articleById: Map<string, Article>
 ): TopArticle[] {
+  // Rank articles by aggregate views while preserving article metadata for display.
   const buckets = new Map<string, GaDailyEngagementRow[]>();
 
   for (const record of records) {

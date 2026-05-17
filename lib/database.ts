@@ -40,6 +40,7 @@ export function upsertAnalyticsSnapshot({
   articles: Article[];
   engagement: GaDailyEngagementRow[];
 }) {
+  // Replace the full snapshot so repeated imports remain idempotent.
   database.articles = [...articles];
   database.gaDailyEngagement = [...engagement];
   database.lastImport = {
@@ -51,10 +52,12 @@ export function upsertAnalyticsSnapshot({
 }
 
 export function selectArticles() {
+  // Return copies so callers cannot mutate the shared in-memory store.
   return [...database.articles];
 }
 
 export function selectGaDailyEngagement() {
+  // Return copies so reporting code behaves like a read-only table query.
   return [...database.gaDailyEngagement];
 }
 
