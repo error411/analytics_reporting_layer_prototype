@@ -1,0 +1,2 @@
+-- Seed data is ingested by POST /api/ingest or lazily by /api/reporting.
+-- This file exists because supabase/config.toml enables db.seed with ./seed.sql.

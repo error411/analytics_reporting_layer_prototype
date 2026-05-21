@@ -2,9 +2,9 @@
   "articles": [
     {
       "id": "art-001",
-      "title": "How to Choose Cherimoya at Peak Ripeness",
-      "category": "Fruit",
-      "slug": "choose-cherimoya-peak-ripeness"
+      "title": "Baby Chioggia Beets Article",
+      "category": "Vegetables",
+      "slug": "baby-chioggia-beets"
     },
     {
       "id": "art-002",
@@ -35,6 +35,30 @@
       "title": "Stone Fruit Season Planning for Restaurant Menus",
       "category": "Fruit",
       "slug": "stone-fruit-menu-planning"
+    },
+    {
+      "id": "art-007",
+      "title": "Why Chefs Are Buying More Flowering Brassicas",
+      "category": "Vegetables",
+      "slug": "flowering-brassicas-chef-demand"
+    },
+    {
+      "id": "art-008",
+      "title": "A Buyer Guide to Fresh Wasabi and Substitutes",
+      "category": "Roots",
+      "slug": "fresh-wasabi-buyer-guide"
+    },
+    {
+      "id": "art-009",
+      "title": "Using Microgreens to Lift Winter Menus",
+      "category": "Greens",
+      "slug": "microgreens-winter-menus"
+    },
+    {
+      "id": "art-010",
+      "title": "The Restaurant Case for Seasonal Persimmons",
+      "category": "Fruit",
+      "slug": "seasonal-persimmons-restaurant-guide"
     }
   ],
   "engagement": [
