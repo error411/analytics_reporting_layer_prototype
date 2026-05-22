@@ -23,10 +23,8 @@ export type AggregatedPoint = {
 };
 
 export type TopArticle = {
-  articleId: string;
   title: string;
   category: string;
-  slug: string;
   views: number;
   averageEngagementScore: number;
 };
@@ -64,6 +62,10 @@ export type ReportingResponse = {
 };
 
 const allowedGroupBy: GroupBy[] = ["date", "source", "country"];
+const engagementInsertBatchSize = 1000;
+const maxReportRangeDays = 370;
+const maxResultBuckets = 400;
+const maxTopArticles = 5;
 
 type SupabaseArticleRow = {
   id: string;
@@ -101,12 +103,15 @@ export async function ingestSimulatedGaData() {
     prefer: "resolution=merge-duplicates"
   });
 
-  await supabaseRequest<SupabaseEngagementRow[]>("ga_daily_engagement", {
-    method: "POST",
-    query: { on_conflict: "article_id,date,country,source" },
-    body: rows.engagement.map(toEngagementRow),
-    prefer: "resolution=merge-duplicates"
-  });
+  // The generated history is intentionally broad, so insert engagement in REST-sized chunks.
+  for (const batch of chunk(rows.engagement.map(toEngagementRow), engagementInsertBatchSize)) {
+    await supabaseRequest<SupabaseEngagementRow[]>("ga_daily_engagement", {
+      method: "POST",
+      query: { on_conflict: "article_id,date,country,source" },
+      body: batch,
+      prefer: "resolution=merge-duplicates"
+    });
+  }
 
   const [importRun] = await supabaseRequest<ImportRunRow[]>("ga_import_runs", {
     method: "POST",
@@ -131,8 +136,10 @@ export function normalizeQuery(query: ReportingQuery) {
   const articleId = query.articleId || undefined;
   const category = query.category || "All";
   const groupBy = allowedGroupBy.includes(query.groupBy) ? query.groupBy : "date";
-  const startDate = query.startDate || undefined;
-  const endDate = query.endDate || undefined;
+  const endDate = query.endDate || todayString();
+  const startDate = query.startDate || daysBefore(endDate, maxReportRangeDays - 1);
+
+  validateDateRange(startDate, endDate);
 
   return { articleId, category, startDate, endDate, groupBy };
 }
@@ -167,10 +174,12 @@ export async function buildReport(query: ReportingQuery): Promise<ReportingRespo
     body.p_article_id = filters.articleId;
   }
 
-  return supabaseRequest<ReportingResponse>("rpc/build_reporting_report", {
+  const report = await supabaseRequest<ReportingResponse>("rpc/build_reporting_report", {
     method: "POST",
     body
   });
+
+  return sanitizeReport(report);
 }
 
 function toArticleRow(article: Article): SupabaseArticleRow {
@@ -187,5 +196,72 @@ function toEngagementRow(record: GaDailyEngagementRow): SupabaseEngagementRow {
     country: record.country,
     source: record.source,
     imported_at: record.importedAt
+  };
+}
+
+function chunk<T>(items: T[], size: number) {
+  const batches: T[][] = [];
+
+  for (let index = 0; index < items.length; index += size) {
+    batches.push(items.slice(index, index + size));
+  }
+
+  return batches;
+}
+
+function validateDateRange(startDate?: string, endDate?: string) {
+  if (!startDate || !endDate) {
+    return;
+  }
+
+  const start = parseDate(startDate, "startDate");
+  const end = parseDate(endDate, "endDate");
+
+  if (start > end) {
+    throw new Error("startDate must be before or equal to endDate.");
+  }
+
+  const rangeDays = Math.floor((end.getTime() - start.getTime()) / 86_400_000) + 1;
+
+  if (rangeDays > maxReportRangeDays) {
+    throw new Error(`Reporting range is limited to ${maxReportRangeDays} days per request.`);
+  }
+}
+
+function parseDate(value: string, label: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new Error(`${label} must use YYYY-MM-DD format.`);
+  }
+
+  const date = new Date(`${value}T00:00:00.000Z`);
+
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(`${label} must be a valid date.`);
+  }
+
+  return date;
+}
+
+function todayString() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function daysBefore(value: string, days: number) {
+  const date = parseDate(value, "endDate");
+  date.setUTCDate(date.getUTCDate() - days);
+
+  return date.toISOString().slice(0, 10);
+}
+
+function sanitizeReport(report: ReportingResponse): ReportingResponse {
+  return {
+    ...report,
+    results: report.results.slice(0, maxResultBuckets),
+    topArticles: report.topArticles.slice(0, maxTopArticles).map((article) => ({
+      title: article.title,
+      category: article.category,
+      views: article.views,
+      averageEngagementScore: article.averageEngagementScore
+    }))
   };
 }

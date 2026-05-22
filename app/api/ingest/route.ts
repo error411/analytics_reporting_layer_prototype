@@ -1,17 +1,27 @@
-import { NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { ingestSimulatedGaData } from "@/lib/reporting";
+import { protectApiRoute, protectedJson } from "@/lib/api-protection";
 
-export async function POST() {
+export async function POST(request: NextRequest) {
+  const protection = protectApiRoute(request, {
+    requireApiKey: true,
+    rateLimit: {
+      maxRequests: 3
+    }
+  });
+
+  if (!protection.ok) {
+    return protection.response;
+  }
+
   try {
     const importMetadata = await ingestSimulatedGaData();
 
-    return NextResponse.json({
+    return protectedJson({
       ok: true,
       import: importMetadata
     });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to ingest simulated GA data.";
-
-    return NextResponse.json({ error: message }, { status: 500 });
+  } catch {
+    return protectedJson({ error: "Unable to ingest simulated GA data." }, { status: 500 });
   }
 }

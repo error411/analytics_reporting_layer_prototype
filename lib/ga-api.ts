@@ -36,8 +36,9 @@ const countries = [
   "Costa Rica"
 ];
 const sources = ["organic", "newsletter", "social", "direct", "referral", "paid"];
-const baseDate = "2024-05-01";
-const dayCount = 730;
+const baseDate = "2020-01-01";
+const endDate = "2026-04-30";
+const dayCount = daysBetween(baseDate, endDate) + 1;
 
 export function fetchSimulatedGaApiData(): GaApiPayload {
   const articles = seed.articles as GaArticlePayload[];
@@ -111,23 +112,40 @@ function generateEngagement(articles: GaArticlePayload[]) {
 }
 
 function viewsFor(dayIndex: number, articleIndex: number) {
-  const base = 2 + articleIndex * 0.8;
-  const trend = dayIndex > 365 ? (dayIndex - 365) * 0.03 * (articleIndex + 1) : 0;
+  const base = 2 + (articleIndex % 12) * 0.8 + Math.floor(articleIndex / 12) * 1.4;
+  const trend = dayIndex > 365 ? (dayIndex - 365) * 0.008 * ((articleIndex % 10) + 1) : 0;
   const weeklyPulse = [0, 1, 0, 1, 2, 3, 2][dayIndex % 7];
-  const campaignLift = dayIndex > 650 && dayIndex < 690 ? 4 + articleIndex : 0;
+  const seasonalLift = seasonalDemand(dayIndex, articleIndex);
+  const campaignLift = dayIndex > dayCount - 80 && dayIndex < dayCount - 40 ? 4 + articleIndex * 0.15 : 0;
 
-  return Math.round(base + trend + weeklyPulse + campaignLift);
+  return Math.round(base + trend + weeklyPulse + seasonalLift + campaignLift);
 }
 
 function engagementScoreFor(dayIndex: number, articleIndex: number) {
-  const score = 58 + articleIndex * 3.4 + (dayIndex % 10) * 1.3 + (dayIndex > 70 ? 4 : 0);
+  const score = 54 + (articleIndex % 14) * 2.2 + (dayIndex % 10) * 1.1 + (dayIndex > 70 ? 4 : 0);
   return Math.min(96, Math.round(score * 10) / 10);
+}
+
+function seasonalDemand(dayIndex: number, articleIndex: number) {
+  const month = new Date(`${addDays(baseDate, dayIndex)}T00:00:00`).getMonth();
+  const warmSeason = month >= 4 && month <= 8 ? 2.5 : 0;
+  const coolSeason = month <= 2 || month >= 9 ? 2.2 : 0;
+
+  if (articleIndex <= 13) return coolSeason;
+  if (articleIndex >= 31) return warmSeason;
+  return month % 3 === articleIndex % 3 ? 1.6 : 0;
 }
 
 function addDays(date: string, offset: number) {
   const nextDate = new Date(`${date}T00:00:00`);
   nextDate.setDate(nextDate.getDate() + offset);
   return nextDate.toISOString().slice(0, 10);
+}
+
+function daysBetween(start: string, end: string) {
+  const startTime = new Date(`${start}T00:00:00`).getTime();
+  const endTime = new Date(`${end}T00:00:00`).getTime();
+  return Math.round((endTime - startTime) / 86_400_000);
 }
 
 function slugify(value: string) {

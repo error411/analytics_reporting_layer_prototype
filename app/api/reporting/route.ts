@@ -1,12 +1,21 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { buildReport, GroupBy } from "@/lib/reporting";
+import { protectApiRoute, protectedJson } from "@/lib/api-protection";
 
 export async function GET(request: NextRequest) {
+  const protection = protectApiRoute(request, {
+    rateLimit: {
+      maxRequests: 20
+    }
+  });
+
+  if (!protection.ok) {
+    return protection.response;
+  }
+
   const searchParams = request.nextUrl.searchParams;
 
   try {
-    // In a real protected layer, this route would also verify auth, tenant access,
-    // and row-level permissions before calling buildReport.
     const report = await buildReport({
       articleId: searchParams.get("articleId") || undefined,
       category: searchParams.get("category") || undefined,
@@ -15,10 +24,20 @@ export async function GET(request: NextRequest) {
       groupBy: (searchParams.get("groupBy") || "date") as GroupBy
     });
 
-    return NextResponse.json(report);
+    return protectedJson(report);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to load reporting data.";
+    const message = error instanceof Error && isClientError(error.message)
+      ? error.message
+      : "Unable to load reporting data.";
 
-    return NextResponse.json({ error: message }, { status: 500 });
+    return protectedJson({ error: message }, { status: isClientError(message) ? 400 : 500 });
   }
+}
+
+function isClientError(message: string) {
+  return (
+    message.includes("Reporting range") ||
+    message.includes("startDate") ||
+    message.includes("endDate")
+  );
 }

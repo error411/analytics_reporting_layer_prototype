@@ -14,6 +14,7 @@ npm run dev
 
 Update `.env.local` with the local `service_role` key from `supabase status`, then open `http://localhost:3000`.
 The Supabase SQL seed file is intentionally empty; app data is imported through `/api/ingest`.
+Set `REPORTING_API_KEY` to a long random value before running outside local development.
 
 ## Architecture
 
@@ -23,11 +24,11 @@ Simulated GA API -> Supabase Postgres -> SQL reporting function -> API -> dashbo
 
 ## How The Pieces Fit
 
-- `data/seed.json` acts like the GA API seed payload. `lib/ga-api.ts` expands it into a deterministic 120-day feed.
+- `data/seed.json` acts like the GA API seed payload. `lib/ga-api.ts` expands 40 granular produce pages into deterministic daily engagement from January 2020 through April 2026.
 - `supabase/migrations/*_analytics_reporting.sql` creates `articles`, `ga_daily_engagement`, `ga_import_runs`, and `build_reporting_report(...)`.
 - `lib/reporting.ts` is the protected reporting layer. It ingests simulated GA data into Supabase and asks Postgres for aggregated reporting JSON. Raw engagement records do not leave this layer.
-- `app/api/reporting/route.ts` is the API boundary. It accepts `category`, `startDate`, `endDate`, and `groupBy`, then returns aggregated results only.
-- `app/api/ingest/route.ts` lets you rerun the simulated GA import with `POST /api/ingest`.
+- `app/api/reporting/route.ts` is the API boundary. It accepts `category`, `startDate`, `endDate`, and `groupBy`, then returns bounded aggregate results only.
+- `app/api/ingest/route.ts` lets you rerun the simulated GA import with `POST /api/ingest` when you send `x-reporting-api-key`.
 - `app/page.tsx` is the dashboard. It calls the API, renders filters, draws a line chart, lists top articles, and shows a rolling-average forecast.
 
 ## API
@@ -35,13 +36,13 @@ Simulated GA API -> Supabase Postgres -> SQL reporting function -> API -> dashbo
 Example request:
 
 ```text
-/api/reporting?category=Fruit&startDate=2026-04-01&endDate=2026-04-30&groupBy=date
+/api/reporting?category=Roots&startDate=2026-01-01&endDate=2026-04-30&groupBy=date
 ```
 
 Supported query parameters:
 
-- `category`: `All`, `Fruit`, `Vegetables`, `Herbs`, `Mushrooms`, `Roots`, or `Greens`
-- `startDate`: date string like `2026-04-01`
+- `category`: `All`, `Alliums`, `Brassicas`, `Fruit`, `Fruiting Vegetables`, `Greens`, `Herbs`, `Mushrooms`, `Roots`, `Squash`, or `Tubers`
+- `startDate`: date string like `2020-01-01`
 - `endDate`: date string like `2026-04-30`
 - `groupBy`: `date`, `source`, or `country`
 
@@ -53,10 +54,13 @@ The reporting API response includes:
 - `forecast`: three future daily points based on a three-day rolling average
 - `dataSource`: simulated GA import metadata and table row counts
 
+Reporting requests are same-origin only, private/no-store, rate-limited, and limited to 370 days per request so clients cannot scrape the full history in one call. If dates are omitted, the API defaults to the most recent 370-day window.
+
 To rerun the simulated import:
 
 ```bash
-curl -X POST http://localhost:3000/api/ingest
+curl -X POST http://localhost:3000/api/ingest \
+  -H "x-reporting-api-key: $REPORTING_API_KEY"
 ```
 
 ## Why This Is "Protected"
@@ -66,7 +70,7 @@ In production, the reporting layer is where authentication, tenant permissions, 
 1. Simulated GA records are fetched and expanded from `data/seed.json`.
 2. The ingest layer stores normalized rows in Supabase tables.
 3. `build_reporting_report(...)` filters and aggregates table rows according to the requested report.
-4. The API route only returns aggregate output.
+4. The API route only returns bounded aggregate output and strips stable article IDs/slugs from rankings.
 5. The dashboard never receives raw engagement rows.
 
 That separation is the important pattern: dashboards consume prepared reporting results, not the original source event stream.
